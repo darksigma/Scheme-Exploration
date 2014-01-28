@@ -1,7 +1,5 @@
 #lang racket
-;;
-;; eval.scm - 6.037
-;;
+
 (require r5rs)
 (define first car)
 (define second cadr)
@@ -68,7 +66,7 @@
 (define (let? expr) (tagged-list? expr 'let))
 (define (let-bound-variables expr) (mmap first (second expr)))
 (define (let-values expr) (mmap second (second expr)))
-(define (let-body expr) (cddr expr))
+(define (let-body expr) (cddr expr)) 
 (define (make-let bindings body)
   (cons 'let (cons bindings body)))
 
@@ -90,15 +88,9 @@
 (define (first-operand args) (car args))
 (define (rest-operands args) (cdr args))
 (define (make-application rator rands)
-  (cons rator rands))
-
+  (cons rator rands)) 
 (define (time? exp) (tagged-list? exp 'time))
 
-(define (and? exp) (tagged-list? exp 'and))
-
-;;
-;; this section is the actual implementation of meval
-;;
 
 (define (m-eval exp env)
   (cond ((self-evaluating? exp) exp)
@@ -106,8 +98,9 @@
         ((quoted? exp) (text-of-quotation exp))
         ((assignment? exp) (eval-assignment exp env))
         ((definition? exp) (eval-definition exp env))
+        ((unset? exp) (eval-unset exp env))
         ((if? exp) (eval-if exp env))
-        ((and? exp) (eval-and exp env)) 
+        ((and? exp) (eval-and exp env))
         ((lambda? exp)
          (make-procedure (lambda-parameters exp) (lambda-body exp) env))
         ((begin? exp) (eval-sequence (begin-actions exp) env))
@@ -115,6 +108,8 @@
         ((until? exp) (m-eval (until->transformed exp) env))
         ((let? exp) (m-eval (let->application exp) env))
         ((time? exp) (time (m-eval (second exp) env)))
+        ((procedure-env? exp) (procedure-environment (lookup-variable-value (second exp) env))) ;ADDED
+        ((current-env? exp) env)
         ((application? exp)
          (m-apply (m-eval (operator exp) env)
                 (list-of-values (operands exp) env)))
@@ -156,14 +151,6 @@
   (define-variable! (definition-variable exp)
                     (m-eval (definition-value exp) env)
                     env))
-
-(define (eval-and exps env)
-  (define (and-helper explist env)
-    (cond ((equal? explist '()) #t)
-          ((equal? (car explist) #f) #f)
-          ((last-exp? explist) (m-eval (car explist) env))
-          (else (and-helper (rest-exps explist) env))))
-  (and-helper (rest-exps exps) env))
 
 (define (let->application expr)
   (let ((names (let-bound-variables expr))
@@ -211,7 +198,7 @@
 ;; implementation of meval environment model
 ;;
 
-; environment for procedures
+; double bubbles
 (define (make-procedure parameters body env)
   (list 'procedure parameters body env))
 (define (compound-procedure? proc)
@@ -223,7 +210,7 @@
 
 ; bindings
 (define (make-binding var val)
-  (list 'binding var val))
+  (list 'binding var (list val)))
 (define (binding? b)
   (tagged-list? b 'binding))
 (define (binding-variable binding)
@@ -232,12 +219,13 @@
       (error "Not a binding: " binding)))
 (define (binding-value binding)
   (if (binding? binding)
-      (third binding)
+      (car (third binding))
       (error "Not a binding: " binding)))
 (define (set-binding-value! binding val)
   (if (binding? binding)
-      (set-car! (cddr binding) val)
+      (set-car! (cddr binding) (cons val (third binding)))
       (error "Not a binding: " binding)))
+
 
 ; frames
 (define (make-frame variables values)
@@ -332,7 +320,7 @@
   (let ((frame (environment-first-frame env)))
     (let ((binding (find-in-frame var frame)))
       (if binding
-          (set-binding-value! binding val)
+          (set-car! (cddr binding) (list val))
           (add-binding-to-frame!
            (make-binding var val)
            frame)))))
@@ -362,6 +350,20 @@
         (list 'newline newline)
         (list 'printf printf) 
         (list 'length length)
+        (list 'env-variables (lambda env (frame-variables (environment-first-frame env))))
+        (list 'env-parent enclosing-environment)
+        (list 'env-value (lambda (var env) (binding-value (find-in-environment var env))))
+        (list 'caddr caddr)
+        (list 'cadddr cadddr)
+        (list 'symbol? symbol?)
+        (list 'pair? pair?)
+        (list 'eq? eq?)
+        (list 'cddr cddr)
+        (list 'number? number?)
+        (list 'string? string?) 
+        (list 'boolean? boolean?)
+        (list 'caadr caadr)
+        (list 'cdadr cdadr) 
         ))
 
 (define (primitive-procedure-names) (mmap car (primitive-procedures)))
@@ -382,13 +384,6 @@
 
 
 
-;;;;;;;; Code necessary for question 5
-;;
-;; This section doesn't contain any user-servicable parts -- you
-;; shouldn't need to edit it for any of the questions on the project,
-;; including question 5.  However, if you're curious, comments provide a
-;; rough outline of what it does.
-
 ;; Keep track of what depth we are into nesting
 (define meval-depth 1)
 
@@ -402,7 +397,7 @@
                     (lambda () (this-expression-file-name)))
         (list 'pretty-display   pretty-display)
         (list 'error            error)
-        (list 'apply            m-apply))) ;; <-- This line is somewhat interesting
+        (list 'apply            m-apply)))
 (define stubs
   '(require r5rs mzlib/etc print-as-expression print-mpair-curly-braces))
 (define additional-names (mmap first additional-primitives))
@@ -431,21 +426,45 @@
   (set-variable-value! 'meval-depth (+ meval-depth 1) the-global-environment)
   'loaded)
 
+;Updates
+(define (eval-and exps env)
+  (define (and-helper explist env)
+    (cond ((equal? explist '()) #t)
+          ((equal? (car explist) #f) #f)
+          ((last-exp? explist) (m-eval (car explist) env))
+          (else (and-helper (rest-exps explist) env))))
+  (and-helper (rest-exps exps) env))
+
+(define (and? exp) (tagged-list? exp 'and))
+
+;Using the until structure
+(define (until? exp) (tagged-list? exp 'until))
+(define (until-condition exp) (cadr exp))
+(define (until-clauses exp) (cddr exp))
+
+(define (until->transformed exp)
+  (list 'let '()
+    (list 'define '(loop)
+      (list 'if (until-condition exp)
+          #t
+          `(begin ,@(until-clauses exp)
+                  (loop))))
+    '(loop)))
 
 
-;STILL IN DEVELOPMENT: Implementation of the until transformer:
-;
-;(define (until->transformed expr)
-;  (define clauses (cdr expr))
-;  (define test (car clauses))
-;  (define exps (cdr clauses))
-;  (define (make-until-body)
-;    (cons (cons 'begin exps) '(loop)))
-;  (define (make-until-if)
-;    (cons (cons (cons 'if test) #t) (quasiquote (unquote (make-until-body exps)))))
-;  (define (make-until-loop)
-;    (cons (cons 'define '(loop)) (quasiquote (unquote (make-until-if test exps)))))
-;  (cons (cons (cons 'let '()) (quasiquote (unquote (make-until-loop test exps)))) '(loop)))
-;    
-;(define (until? exp) (tagged-list? exp 'until))
- 
+;Implementation of the unset!:
+(define (unset-variable-value! var env)
+  (let ((binding (find-in-environment var env)))
+    (if binding
+        (unless (null? (cdr (third binding)))
+            (set-car! (cddr binding) (cdr (third binding))))
+        (error "Unbound variable -- SET" var))))
+
+(define (eval-unset exp env)
+  (unset-variable-value! (second exp) env))
+
+(define (unset? exp) (tagged-list? exp 'unset!))
+  
+;Identify environment-related procedures
+(define (procedure-env? exp) (tagged-list? exp 'procedure-env))
+(define (current-env? exp) (tagged-list? exp 'current-env))
